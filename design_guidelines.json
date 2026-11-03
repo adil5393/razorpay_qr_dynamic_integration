@@ -1,0 +1,147 @@
+{
+  "project_name": "Universal QR Collections - Indian Distribution Billing MVP",
+  "archetype": "Swiss & High-Contrast Performance Pro (Fintech POS & Billing Counter)",
+  "context_type": "DASHBOARDS & ADMIN PANELS",
+  "theme_strategy": {
+    "supported_modes": ["light", "dark"],
+    "default_mode": "dark",
+    "toggle_location": "Top header / Sidebar header",
+    "light_mode_colors": {
+      "bg_primary": "#F8FAFC",
+      "bg_surface": "#FFFFFF",
+      "bg_subtle": "#F1F5F9",
+      "border": "#E2E8F0",
+      "text_primary": "#0F172A",
+      "text_secondary": "#475569",
+      "text_muted": "#64748B",
+      "primary_accent": "#2563EB",
+      "primary_hover": "#1D4ED8"
+    },
+    "dark_mode_colors": {
+      "bg_primary": "#090D16",
+      "bg_surface": "#111827",
+      "bg_subtle": "#1F2937",
+      "border": "#1F2937",
+      "text_primary": "#F9FAFB",
+      "text_secondary": "#9CA3AF",
+      "text_muted": "#6B7280",
+      "primary_accent": "#3B82F6",
+      "primary_hover": "#60A5FA"
+    },
+    "forbidden_colors": ["#1B93A4", "#7351B7"]
+  },
+  "typography": {
+    "pairing_strategy": "The Swiss Utility (Display Sans + Tech Mono)",
+    "font_family_heading": "Outfit, Plus Jakarta Sans, sans-serif",
+    "font_family_body": "DM Sans, sans-serif",
+    "font_family_mono": "JetBrains Mono, monospace",
+    "headings": {
+      "h1_hero": "text-3xl sm:text-4xl font-bold tracking-tight",
+      "h2_section": "text-xl sm:text-2xl font-semibold tracking-tight",
+      "h3_card": "text-lg font-medium tracking-normal",
+      "mono_display": "font-mono font-bold tracking-wider"
+    },
+    "rules": [
+      "DO NOT use Inter or Space Grotesk for Headings.",
+      "Always use JetBrains Mono for INR monetary amounts, UPI IDs, Razorpay QR IDs, Invoice Reference numbers, and Timestamps.",
+      "Headings over 24px must use tight letter spacing (tracking-tight)."
+    ]
+  },
+  "status_badge_system": {
+    "paid": {
+      "label": "PAID / SUCCESSFUL",
+      "bg_light": "bg-emerald-100 text-emerald-800 border-emerald-300",
+      "bg_dark": "bg-emerald-950/80 text-emerald-400 border-emerald-800",
+      "indicator_dot": "bg-emerald-500 animate-pulse"
+    },
+    "pending": {
+      "label": "PENDING / ACTIVE",
+      "bg_light": "bg-amber-100 text-amber-800 border-amber-300",
+      "bg_dark": "bg-amber-950/80 text-amber-400 border-amber-800",
+      "indicator_dot": "bg-amber-500 animate-ping"
+    },
+    "failed_expired": {
+      "label": "FAILED / EXPIRED",
+      "bg_light": "bg-rose-100 text-rose-800 border-rose-300",
+      "bg_dark": "bg-rose-950/80 text-rose-400 border-rose-800",
+      "indicator_dot": "bg-rose-500"
+    },
+    "closed": {
+      "label": "CLOSED / INACTIVE",
+      "bg_light": "bg-slate-100 text-slate-700 border-slate-300",
+      "bg_dark": "bg-slate-800 text-slate-300 border-slate-700",
+      "indicator_dot": "bg-slate-400"
+    }
+  },
+  "layout_and_spacing": {
+    "sidebar": {
+      "desktop_width": "w-64",
+      "mobile_behavior": "Drawer sheet with hamburger toggle",
+      "items": ["Dashboard", "New QR Collection", "QR History", "User Management (Admin)"],
+      "sticky_header": "z-40 backdrop-blur-md border-b"
+    },
+    "billing_counter_screen": {
+      "optimization": "Large touch targets (min 48px height for inputs/buttons), split-screen visual feedback layout for tablet/desktop.",
+      "left_panel": "Fast payment generator form with quick preset buttons (₹100, ₹500, ₹1000, ₹5000, Custom), Amount INR, Invoice/Ref, Customer Name, Notes.",
+      "right_panel": "Spacious QR presentation viewport with real-time status polling, live payment notification sound simulation, URL copy, PNG download, and test-mode notice banner."
+    },
+    "dashboard_grid": {
+      "mode": "MODE B: High Density Grid (4-column layout)",
+      "cards": [
+        "Card 1: Total Confirmed Collections (INR)",
+        "Card 2: Successful Payment Count",
+        "Card 3: Pending QR Collections",
+        "Card 4: Quick QR Action Widget",
+        "Main Section: Recent Payment Activity (Dense tabular display with real-time updates)"
+      ]
+    }
+  },
+  "test_mode_notice_banner": {
+    "style": "bg-amber-500/10 border-l-4 border-amber-500 text-amber-700 dark:text-amber-300 p-4 rounded-r-lg shadow-sm font-medium text-sm flex items-center gap-3",
+    "text": "NOTICE: Razorpay Test Mode active. Generated QR codes are for testing workflow integration and will not process real bank money transfers."
+  },
+  "component_guidelines": {
+    "toast_notifications": "Use Sonner for toasts (copied to clipboard, QR generated, payment received, user deactivated).",
+    "modal_and_dialogs": "Use customized Shadcn Dialogs with crisp semi-transparent borders and subtle dark backdrops.",
+    "tables": "Searchable, filterable by payment status and date range, zebra-striped subtle hover effects, formatted dates and currency.",
+    "qr_display": "High contrast black-on-white QR canvas container with rounded corners, download image button, copy payment link button, and clear expiration/status countdown."
+  },
+  "image_urls": {
+    "qr_scan_illustration": "https://images.unsplash.com/photo-1595079676339-1534801ad6cf?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzl8MHwxfHNlYXJjaHwxfHxpbmRpYW4lMjB1cGklMjBwYXltZW50JTIwcXIlMjBjb2RlJTIwc2Nhbm5lciUyMG1lcmNoYW50JTIwbG9nb3xlbnwwfHx8fDE3OTM3MzUxNDR8MA&ixlib=rb-4.1.0&q=85",
+    "phone_pay_demo": "https://images.unsplash.com/photo-1595079835357-a94a13cab10c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzl8MHwxfHNlYXJjaHwzfHxpbmRpYW4lMjB1cGklMjBwYXltZW50JTIwcXIlMjBjb2RlJTIwc2Nhbm5lciUyMG1lcmNoYW50JTIwbG9nb3xlbnwwfHx8fDE3OTM3MzUxNDR8MA&ixlib=rb-4.1.0&q=85"
+  },
+  "testing_attributes": {
+    "requirement": "ALL interactive components (inputs, buttons, status badges, rows, tabs, toggles) MUST include explicit kebab-case data-testid attributes.",
+    "examples": [
+      "data-testid=\"login-email-input\"",
+      "data-testid=\"login-submit-button\"",
+      "data-testid=\"nav-dashboard-link\"",
+      "data-testid=\"nav-new-qr-link\"",
+      "data-testid=\"nav-qr-history-link\"",
+      "data-testid=\"nav-user-mgmt-link\"",
+      "data-testid=\"qr-amount-input\"",
+      "data-testid=\"qr-reference-input\"",
+      "data-testid=\"qr-customer-name-input\"",
+      "data-testid=\"qr-description-input\"",
+      "data-testid=\"generate-qr-button\"",
+      "data-testid=\"preset-amount-500-button\"",
+      "data-testid=\"copy-qr-url-button\"",
+      "data-testid=\"download-qr-image-button\"",
+      "data-testid=\"qr-status-badge\"",
+      "data-testid=\"test-mode-banner\"",
+      "data-testid=\"history-search-input\"",
+      "data-testid=\"history-status-filter\"",
+      "data-testid=\"theme-toggle-button\"",
+      "data-testid=\"user-role-badge\""
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Follow this design guideline strictly when implementing components.",
+    "Ensure dark mode and light mode toggle works smoothly and defaults to dark mode.",
+    "Make billing counter QR generation screen touch-friendly with minimum 48px height on touch buttons and inputs for tablet use.",
+    "Ensure polling logic works for QR payment status updates in QR detail and billing screens.",
+    "Always render the Razorpay test-mode notice banner visibly on QR generation and QR detail screens.",
+    "Include high-contrast payment status chips for PAID, PENDING, FAILED, and EXPIRED statuses.",
+    "Attach data-testid attributes to all form inputs, buttons, table rows, and status badges."
+  ]
+}

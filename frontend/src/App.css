@@ -1,0 +1,3 @@
+::selection {
+    background: hsl(var(--primary) / 0.25);
+}
