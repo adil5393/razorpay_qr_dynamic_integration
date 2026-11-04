@@ -1,0 +1,118 @@
+name: razorpay-qr-prod
+
+# Usage (on the VPS, from the repo root):
+#   docker compose -f compose.prod.yaml --env-file .env.production build
+#   docker compose -f compose.prod.yaml --env-file .env.production up -d db
+#   docker compose -f compose.prod.yaml --env-file .env.production run --rm migrate   # explicit migration step
+#   docker compose -f compose.prod.yaml --env-file .env.production up -d
+# Back up first: docker compose -f compose.prod.yaml exec db pg_dump -U "$POSTGRES_USER" -Fc "$POSTGRES_DB" > backup.dump
+
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?Required}:${POSTGRES_PASSWORD:?Required}@db:5432/${POSTGRES_DB:?Required}
+  APP_ENV: production
+  RUN_MIGRATIONS_ON_STARTUP: "false"
+  LOG_FORMAT: json
+  # Only the frontend nginx container (on the pinned network below) may set the client IP.
+  TRUSTED_PROXIES: 172.28.10.0/24
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Required}
+      POSTGRES_USER: ${POSTGRES_USER:?Required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Required}
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+    networks:
+      - internal
+
+  # One-off: `run --rm migrate`. Never started by `up`.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    profiles: ["tools"]
+    env_file:
+      - .env.production
+    environment: *backend-env
+    command: ["python", "migrate.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+
+    restart: unless-stopped
+
+    env_file:
+      - .env.production
+
+    environment: *backend-env
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    expose:
+      - "8000"
+
+    networks:
+      - internal
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+
+    restart: unless-stopped
+
+    # Host nginx (TLS) proxies to this. Never bind to a public interface.
+    ports:
+      - "127.0.0.1:8090:80"
+
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.10.0/24
+
+volumes:
+  postgres_data:

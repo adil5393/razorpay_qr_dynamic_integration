@@ -104,3 +104,6 @@ pgdata/
 venv/
 .venv/
 .pytest_cache/
+
+# Server-specific deployment files (host nginx, TLS) stay local
+deploy/*

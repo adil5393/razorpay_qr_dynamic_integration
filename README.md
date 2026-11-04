@@ -111,13 +111,31 @@ Never commit `.env` files, credentials or database files (`pgdata/` is ignored).
 
 **Migrations are a deployment step.** Run `python migrate.py` once per release, before starting the new app containers. With `APP_ENV=production` the app refuses `RUN_MIGRATIONS_ON_STARTUP=true` and refuses to start if the database schema is not at the latest revision.
 
-**Reverse proxy (nginx) and client IPs.** Login rate limiting uses the client IP, so it must not be spoofable:
-- Run uvicorn with `--no-proxy-headers --no-access-log` (uvicorn's own forwarded-header handling is turned off; `TRUSTED_PROXIES` alone decides; requests are logged once, with request IDs).
-- Set `TRUSTED_PROXIES` to exactly the address/subnet nginx connects from (e.g. the Docker network of the nginx container). Nothing else.
-- In nginx, overwrite the header at the edge rather than appending to what the client sent:
-  `proxy_set_header X-Forwarded-For $remote_addr;` and `proxy_set_header X-Request-ID $request_id;`
-- Never publish the app port on a public interface. Bind it to `127.0.0.1` or keep it on the internal Docker network only; otherwise traffic could reach the app from an address inside `TRUSTED_PROXIES` without passing through nginx.
-- `X-Real-IP` and `Forwarded` headers are ignored by the app.
+**Docker (OVH VPS).** `compose.prod.yaml` runs PostgreSQL, the backend and the frontend nginx (which serves the React build and proxies `/api/`). Only the frontend is published, on `127.0.0.1:8090`; the host nginx terminates TLS and proxies to it.
+
+```bash
+docker compose -f compose.prod.yaml --env-file .env.production build
+docker compose -f compose.prod.yaml --env-file .env.production up -d db
+docker compose -f compose.prod.yaml --env-file .env.production run --rm migrate   # explicit migration step
+docker compose -f compose.prod.yaml --env-file .env.production up -d
+```
+`.env.production` (never committed) must define `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` and `RAZORPAY_EXPECTED_MODE`, plus the app settings. Compose sets `APP_ENV=production`, JSON logs, `RUN_MIGRATIONS_ON_STARTUP=false` and `TRUSTED_PROXIES` for its pinned network (`172.28.10.0/24`). Local Docker: see the header of `compose.local.yaml`.
+
+**Client IPs (login lockout, public-page rate limit).** Two nginx layers:
+1. Host nginx (TLS) must **overwrite** the client IP header. Otherwise all users share one IP, and if it passes the client's own header through, IPs can be spoofed:
+   ```nginx
+   location / {
+       proxy_pass http://127.0.0.1:8090;
+       proxy_set_header Host $host;
+       proxy_set_header X-Real-IP $remote_addr;          # required
+       proxy_set_header X-Forwarded-Proto $scheme;
+       proxy_set_header X-Request-ID $request_id;
+   }
+   ```
+2. The frontend container nginx believes `X-Real-IP` only from the Docker gateway (the host nginx), then sends the backend `X-Forwarded-For: <client>`, overwriting any client value.
+3. The backend believes `X-Forwarded-For` only from `TRUSTED_PROXIES` and runs with `--no-proxy-headers --no-access-log`.
+
+Never publish the backend or database ports, or bind the frontend to a public interface.
 
 1. Provision a hosted PostgreSQL and set `DATABASE_URL` (do not set `LOCAL_POSTGRES_BOOTSTRAP`).
 2. Set all variables above as production secrets; use `rzp_live_…` keys only when ready for real money.

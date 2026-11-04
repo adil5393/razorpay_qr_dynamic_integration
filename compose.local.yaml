@@ -1,0 +1,54 @@
+name: razorpay-qr
+
+# Usage: docker compose -f compose.local.yaml --env-file .env.local up --build
+# (--env-file is needed so ${LOCAL_DATABASE_URL} below can be filled in; env_file alone does not do that.)
+# A PostgreSQL on this machine is reachable from the container as host.docker.internal, e.g.
+#   LOCAL_DATABASE_URL=postgresql+psycopg://qruser:...@host.docker.internal:5433/qrcollections
+# Migrations: docker compose -f compose.local.yaml --env-file .env.local run --rm backend python migrate.py
+# App: http://localhost:8090
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+
+    restart: unless-stopped
+
+    env_file:
+      - .env.local
+
+    environment:
+      DATABASE_URL: ${LOCAL_DATABASE_URL:?Set LOCAL_DATABASE_URL}
+      RUN_MIGRATIONS_ON_STARTUP: "false"
+      TRUSTED_PROXIES: 172.28.20.0/24
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    expose:
+      - "8000"
+
+    networks:
+      - app
+
+  frontend:
+    build:
+      context: ./frontend
+
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:8090:80"
+
+    depends_on:
+      - backend
+
+    networks:
+      - app
+
+networks:
+  app:
+    ipam:
+      config:
+        - subnet: 172.28.20.0/24
