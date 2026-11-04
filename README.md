@@ -37,12 +37,34 @@ Frontend: `REACT_APP_BACKEND_URL` only. No secrets ever reach the browser.
 # database (preview container): bash scripts/start_postgres.sh
 cd backend
 pip install -r requirements-dev.txt   # production installs requirements.txt only
-python migrate.py            # alembic upgrade head (also runs at app startup)
+python migrate.py            # apply migrations explicitly (see "Migrations")
 python bootstrap_admin.py    # creates the first admin from ADMIN_* env vars
 uvicorn server:app --host 0.0.0.0 --port 8001
 
 cd ../frontend && npm ci && npm start
 ```
+
+## Database schema (migrations)
+| Revision | Contents |
+|---|---|
+| `0001_initial` | users, qr_collections, payments, webhook_events, login_attempts |
+| `0002_integration_foundation` | Additive. `qr_collections` gains `public_token` (random, unique, backfilled), `source` (`dashboard`/`api`), `api_client_id`, `idempotency_key` + `idempotency_fingerprint` (unique per API client), `updated_at`, and amount checks. New tables: `api_clients` (only a key prefix + key hash are stored; https-only callback URL; encrypted callback secret), `callback_deliveries` (outbox, one row per status change per client) + `callback_attempts`, `audit_logs` (append-only: a trigger rejects UPDATE/DELETE) |
+
+All money is integer paise. Migrations only add tables/columns/constraints; `alembic downgrade 0001_initial` removes exactly what 0002 added.
+
+### Migrations
+Migrations are always run explicitly (`RUN_MIGRATIONS_ON_STARTUP=false`, the recommended setting everywhere). With it off, the app refuses to start until the database is up to date.
+
+```bash
+cd backend
+python -m alembic current            # revision the database is at
+python -m alembic history            # all revisions
+python -m alembic upgrade head --sql # preview the SQL without running it
+python migrate.py                    # apply all pending migrations (takes a lock; safe to re-run)
+```
+Back up the database (`pg_dump -Fc`) before applying migrations in production. Downgrades (`python -m alembic downgrade <rev>`) drop the data in anything the later revision added; never run them on production without a backup and explicit approval.
+
+If `RUN_MIGRATIONS_ON_STARTUP=true` locally, a running `uvicorn --reload` applies new migration files to your local database as soon as they appear.
 
 ## Razorpay webhook
 In Razorpay Dashboard → Settings → Webhooks add `https://<your-domain>/api/webhooks/razorpay` with your `RAZORPAY_WEBHOOK_SECRET`, events `qr_code.credited`, `qr_code.closed`, `payment.captured`. The admin "Razorpay Setup" page shows the exact URL and recent webhook events with errors.
