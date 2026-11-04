@@ -1,8 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Lock, RefreshCw } from "lucide-react";
+import { ArrowLeft, Ban, Loader2, Lock, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { QRDisplay } from "@/components/QRDisplay";
 import { StatusBadge } from "@/components/StatusBadge";
 import { TestModeBanner } from "@/components/TestModeBanner";
@@ -23,6 +28,22 @@ export default function CollectionDetail() {
     staleTime: 0,
   });
   const { data: live, refetch: refetchStatus, isFetching } = useCollectionStatus(data ? cid : undefined);
+  const [cancelling, setCancelling] = useState(false);
+
+  const onCancel = async () => {
+    setCancelling(true);
+    try {
+      await api.post(`/collections/${cid}/cancel`);
+      toast.success("QR cancelled. It can no longer be paid.");
+    } catch (e) {
+      // 409 = already paid / expired (incl. a payment that beat the cancel); 424 = Razorpay problem, QR may still be payable.
+      toast.error(formatApiError(e));
+    } finally {
+      setCancelling(false);
+      qc.invalidateQueries({ queryKey: ["collection", cid] });
+      qc.invalidateQueries({ queryKey: ["collection-status", cid] });
+    }
+  };
 
   useEffect(() => {
     if (live && data && (live.payment_status !== data.payment_status || live.qr_status !== data.qr_status)) {
@@ -50,9 +71,35 @@ export default function CollectionDetail() {
         <Button asChild variant="ghost" className="h-11 gap-2 px-3" data-testid="detail-back-button">
           <Link to="/history"><ArrowLeft className="h-4 w-4" /> Back to history</Link>
         </Button>
-        <Button variant="outline" className="h-11 gap-2" onClick={() => refetchStatus()} disabled={isFetching} data-testid="detail-refresh-status-button">
-          <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} /> Check status
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {(live?.payment_status ?? data.payment_status) === "pending" && (live?.qr_status ?? data.qr_status) === "active" && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline" className="h-11 gap-2 text-rose-600 hover:text-rose-700" disabled={cancelling} data-testid="detail-cancel-qr-button">
+                  {cancelling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />} Cancel QR
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Cancel this QR?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    The QR for {formatINR(data.amount_paise)} will be closed at Razorpay and can no longer be paid.
+                    If the customer has already paid, the payment is kept and the collection is marked paid instead.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel data-testid="cancel-qr-dismiss">Keep QR</AlertDialogCancel>
+                  <AlertDialogAction onClick={onCancel} className="bg-rose-600 hover:bg-rose-700" data-testid="cancel-qr-confirm">
+                    Cancel QR
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+          <Button variant="outline" className="h-11 gap-2" onClick={() => refetchStatus()} disabled={isFetching} data-testid="detail-refresh-status-button">
+            <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} /> Check status
+          </Button>
+        </div>
       </div>
       <TestModeBanner />
       <div className="grid gap-8 lg:grid-cols-[minmax(0,6fr)_minmax(0,5fr)]">

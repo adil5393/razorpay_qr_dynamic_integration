@@ -32,7 +32,7 @@ import razorpay_api  # noqa: E402
 from auth import hash_password  # noqa: E402
 from db import Base, SessionLocal, engine  # noqa: E402
 from models import User  # noqa: E402
-from server import app  # noqa: E402
+from server import app, public_limiter  # noqa: E402
 
 PASSWORD = "Passw0rd!23"
 
@@ -48,6 +48,7 @@ def reset_db():
             User(email="cashier2@test.local", name="Cashier Two", password_hash=hash_password(PASSWORD), role="cashier"),
         ])
         db.commit()
+    public_limiter.reset()
     yield
 
 
@@ -75,6 +76,9 @@ class FakeRazorpay:
         self.payments: dict[str, list[dict]] = {}
         self.created_payloads: list[dict] = []
         self.fail_fetch = False
+        self.fail_close: Exception | None = None  # raised by close_qr
+        self.before_close = None  # callable(qr_id), e.g. to land a payment just before the close
+        self.close_calls: list[str] = []
 
     def create_qr(self, payload):
         self.created_payloads.append(payload)
@@ -103,6 +107,18 @@ class FakeRazorpay:
         self.payments[qr_id].append(p)
         return p
 
+    def close_qr(self, qr_id):
+        self.close_calls.append(qr_id)
+        if self.before_close:
+            self.before_close(qr_id)
+        if self.fail_close:
+            raise self.fail_close
+        qr = self.qrs[qr_id]
+        if qr["status"] == "closed":
+            raise razorpay_api.RazorpayError(400, "QR code is already closed")
+        self.close(qr_id, "on_demand")
+        return dict(qr)
+
     def close(self, qr_id, reason):
         self.qrs[qr_id].update({"status": "closed", "close_reason": reason, "closed_at": int(time.time())})
 
@@ -113,6 +129,7 @@ def fake_rzp(monkeypatch):
     monkeypatch.setattr(razorpay_api, "create_qr", fake.create_qr)
     monkeypatch.setattr(razorpay_api, "fetch_qr", fake.fetch_qr)
     monkeypatch.setattr(razorpay_api, "fetch_qr_payments", fake.fetch_qr_payments)
+    monkeypatch.setattr(razorpay_api, "close_qr", fake.close_qr)
     return fake
 
 

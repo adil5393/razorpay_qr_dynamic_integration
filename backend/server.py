@@ -12,6 +12,7 @@ config.validate()  # fail fast with a readable list of problems
 import ipaddress  # noqa: E402
 import logging  # noqa: E402
 import os  # noqa: E402
+import re  # noqa: E402
 import secrets  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
@@ -21,6 +22,7 @@ from typing import Optional  # noqa: E402
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response  # noqa: E402
 from fastapi.concurrency import run_in_threadpool  # noqa: E402
+from fastapi.encoders import jsonable_encoder  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from sqlalchemy import func, or_, select, text  # noqa: E402
 from sqlalchemy.orm import Session, joinedload  # noqa: E402
@@ -38,7 +40,11 @@ from models import LoginAttempt, Payment, QRCollection, User, WebhookEvent, utcn
 from schemas import (  # noqa: E402
     ChangePassword, CollectionCreate, LoginIn, PasswordReset, UserCreate, UserOut, UserStatusUpdate,
 )
-from services import collection_out, payment_out, process_webhook, sync_collection, ts_to_dt  # noqa: E402
+from ratelimit import RateLimiter  # noqa: E402
+from services import (  # noqa: E402
+    SYNC_ERRORS, apply_closed_qr, collection_out, payment_out, process_webhook, refresh_if_stale, sync_collection,
+    ts_to_dt,
+)
 
 configure_logging()
 logger = logging.getLogger("uqc")
@@ -46,7 +52,17 @@ access_logger = logging.getLogger("uqc.access")
 
 MAX_FAILED_LOGINS = 5
 LOCKOUT_MINUTES = 15
-SYNC_THROTTLE_SECONDS = 8
+PUBLIC_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+PUBLIC_POLL_INTERVAL_MS = 4000
+# Polling every 4 s is 15 requests a minute; allow a few open tabs per IP before refusing.
+public_limiter = RateLimiter(limit=90, window_seconds=60)
+PUBLIC_HEADERS = {
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Robots-Tag": "noindex, nofollow",
+}
+# Shown to customers instead of the internal names (closed -> cancelled).
+PUBLIC_STATUS = {"pending": "pending", "paid": "paid", "expired": "expired", "closed": "cancelled"}
 UPSTREAM_ERROR = 424  # not 502: the preview proxy replaces 502 bodies with its own page
 MAX_WEBHOOK_BYTES = 256 * 1024  # Razorpay events are a few KB
 
@@ -389,17 +405,8 @@ def collection_status(cid: int, refresh: bool = False, user: User = Depends(get_
                       db: Session = Depends(get_db)):
     col = _get_collection(db, cid, user)
     sync_error = None
-    stale = col.last_synced_at is None or (utcnow() - col.last_synced_at).total_seconds() > SYNC_THROTTLE_SECONDS
-    if refresh and col.payment_status == "pending" and stale:
-        try:
-            col = sync_collection(db, col.id)
-        except (rzp.RazorpayError, rzp.RazorpayNotConfigured, ValueError) as exc:
-            db.rollback()
-            sync_error = getattr(exc, "message", None) or str(exc)
-            col = db.get(QRCollection, cid)
-            col.last_sync_error = sync_error[:1000]
-            col.last_synced_at = utcnow()
-            db.commit()
+    if refresh:
+        col, sync_error = refresh_if_stale(db, col)
     successful = next((p for p in col.payments if p.is_successful), None)
     return {
         "id": col.id,
@@ -425,6 +432,126 @@ def collection_qr_image(cid: int, user: User = Depends(get_current_user), db: Se
     ext = "png" if "png" in content_type else "jpg"
     return Response(content=content, media_type=content_type,
                     headers={"Content-Disposition": f'attachment; filename="{col.code}.{ext}"'})
+
+
+def _cancel_conflict(col: QRCollection) -> Optional[HTTPException]:
+    """Why a collection cannot be cancelled now, or None if it can."""
+    if col.payment_status == "paid":
+        return HTTPException(status_code=409, detail="This collection is already paid and cannot be cancelled.")
+    if col.payment_status == "expired":
+        return HTTPException(status_code=409, detail="This QR has already expired.")
+    if col.qr_status == "closed" and col.close_reason == "paid":
+        return HTTPException(status_code=409, detail="A payment is being confirmed by Razorpay; it cannot be cancelled.")
+    return None
+
+
+@api.post("/collections/{cid}/cancel")
+def cancel_collection(cid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Close the QR at Razorpay so it can no longer be paid, then record it as cancelled.
+
+    Razorpay is the source of truth throughout: the collection is only marked cancelled after Razorpay
+    confirms the QR is closed, and a payment captured at any point (even milliseconds before the close)
+    always wins, because every decision is made from a fresh read of Razorpay's QR and payment records.
+    """
+    col = _get_collection(db, cid, user)
+    if col.payment_status == "closed":
+        return collection_out(col)  # already cancelled: idempotent
+    if (conflict := _cancel_conflict(col)):
+        raise conflict
+    qr_id = col.razorpay_qr_id
+
+    # 1. Re-check first, so a payment that has just arrived is seen before we try to cancel.
+    try:
+        col = sync_collection(db, cid)
+    except SYNC_ERRORS as exc:
+        db.rollback()
+        raise HTTPException(status_code=UPSTREAM_ERROR,
+                            detail=f"Could not check the QR with Razorpay, so it was not cancelled: {getattr(exc, 'message', exc)}")
+    if col.payment_status == "closed":
+        return collection_out(col)
+    if (conflict := _cancel_conflict(col)):
+        raise conflict
+
+    # 2. Close at Razorpay.
+    closed_qr, close_error = None, None
+    try:
+        closed_qr = rzp.close_qr(qr_id)
+    except rzp.RazorpayNotConfigured:
+        raise HTTPException(status_code=UPSTREAM_ERROR, detail="Razorpay is not configured; the QR was not cancelled.")
+    except rzp.RazorpayError as exc:
+        logger.warning("Razorpay refused to close QR %s (%s): %s", qr_id, exc.status_code, exc.message)
+        close_error = exc.message  # it may have closed for another reason meanwhile; step 3 finds out
+
+    # 3. Read the final state back from Razorpay (payments included).
+    try:
+        col = sync_collection(db, cid)
+    except SYNC_ERRORS as exc:
+        db.rollback()
+        if closed_qr is None:
+            raise HTTPException(status_code=UPSTREAM_ERROR,
+                                detail=f"Razorpay could not cancel the QR, so it may still be payable: {close_error}")
+        # Close succeeded but the read-back failed: record Razorpay's close response. Any payment that
+        # landed just before the close still arrives by webhook and turns this into paid.
+        logger.warning("QR %s closed but re-check failed: %s", qr_id, getattr(exc, "message", exc))
+        col = apply_closed_qr(db, cid, closed_qr)
+
+    if col.payment_status == "paid":
+        raise HTTPException(status_code=409, detail="A payment was received before the QR could be cancelled. It is now marked paid.")
+    if col.qr_status == "closed" and col.close_reason == "paid":
+        # The customer's payment closed it first; capture not confirmed yet. Not a cancellation.
+        raise HTTPException(status_code=409, detail="A payment is being confirmed by Razorpay; it cannot be cancelled.")
+    if col.qr_status != "closed":
+        raise HTTPException(status_code=UPSTREAM_ERROR,
+                            detail=f"Razorpay could not cancel the QR, so it may still be payable: {close_error}")
+    if col.payment_status == "expired":
+        raise HTTPException(status_code=409, detail="This QR expired before it could be cancelled.")
+    logger.info("Collection %s cancelled by user %s (Razorpay QR %s, close reason %s)",
+                col.code, user.id, qr_id, col.close_reason)
+    return collection_out(col)
+
+
+# ---------- Public payment page ----------
+
+def _public_payment_out(db: Session, col: QRCollection) -> dict:
+    """The only fields a customer's browser ever sees. No internal ids, staff, contact details or payloads."""
+    status = PUBLIC_STATUS.get(col.payment_status, "pending")
+    show_qr = status == "pending" and col.qr_status == "active"
+    paid_payment = db.scalar(
+        select(Payment).where(Payment.collection_id == col.id, Payment.is_successful.is_(True))
+        .order_by(Payment.first_seen_at).limit(1)) if status == "paid" else None
+    return {
+        "customer_name": col.customer_name,
+        "amount_paise": col.amount_paise,
+        "currency": col.currency,
+        "status": status,
+        # QR closed with reason "paid" but the capture is not confirmed yet: no QR, keep polling.
+        "confirming": status == "pending" and col.qr_status == "closed",
+        "qr_image_url": col.image_url if show_qr else None,
+        "expires_at": col.close_by,
+        "paid_at": col.paid_at,
+        "payment_reference": paid_payment.razorpay_payment_id if paid_payment else None,
+        "test_mode": rzp.mode() == "test",
+        "server_time": utcnow(),
+        "poll_interval_ms": PUBLIC_POLL_INTERVAL_MS if status == "pending" else None,
+    }
+
+
+@api.get("/public/pay/{token}")
+def public_payment(token: str, request: Request, db: Session = Depends(get_db)):
+    """Read-only status for the customer payment page. No login; found only by its random token."""
+    if not public_limiter.allow(client_ip(request)):
+        return JSONResponse({"detail": "Too many requests. Please wait a moment."}, status_code=429,
+                            headers={**PUBLIC_HEADERS, "Retry-After": "30"})
+    not_found = JSONResponse({"detail": "Payment link not found"}, status_code=404, headers=PUBLIC_HEADERS)
+    if not PUBLIC_TOKEN_RE.fullmatch(token):
+        return not_found
+    col = db.scalar(select(QRCollection).where(QRCollection.public_token == token))
+    if col is None:
+        return not_found
+    col, sync_error = refresh_if_stale(db, col)
+    if sync_error:
+        logger.info("Public page status check for %s failed: %s", col.code, sync_error)
+    return JSONResponse(jsonable_encoder(_public_payment_out(db, col)), headers=PUBLIC_HEADERS)
 
 
 # ---------- Dashboard ----------

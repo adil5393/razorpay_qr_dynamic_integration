@@ -45,6 +45,8 @@ export interface Collection {
   created_by: { id: number; name: string };
   created_at: string;
   last_synced_at: string | null;
+  public_token: string;
+  payment_page_url: string;
   payments?: PaymentRecord[];
 }
 
@@ -65,4 +67,22 @@ export interface AppConfig {
   razorpay_configured: boolean;
   razorpay_mode: "test" | "live" | null;
   qr_expiry_minutes: number;
+}
+
+export type PublicStatus = "pending" | "paid" | "expired" | "cancelled";
+
+/** Everything the public payment page receives. Deliberately minimal. */
+export interface PublicPayment {
+  customer_name: string | null;
+  amount_paise: number;
+  currency: string;
+  status: PublicStatus;
+  confirming: boolean;
+  qr_image_url: string | null;
+  expires_at: string | null;
+  paid_at: string | null;
+  payment_reference: string | null;
+  test_mode: boolean;
+  server_time: string;
+  poll_interval_ms: number | null;
 }

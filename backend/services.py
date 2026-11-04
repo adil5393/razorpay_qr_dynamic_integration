@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+import config
 import razorpay_api as rzp
 from models import Payment, QRCollection, WebhookEvent, utcnow
 
@@ -15,6 +16,9 @@ logger = logging.getLogger("uqc.services")
 REJECTED_EVENTS_LOGGED_PER_MINUTE = 20
 # Final statuses: a redelivery of the same event id is acknowledged without reprocessing.
 FINAL_EVENT_STATUSES = ("processed", "ignored", "unmatched")
+# At most one Razorpay status check per collection in this many seconds, however many viewers poll.
+SYNC_THROTTLE_SECONDS = 8
+SYNC_ERRORS = (rzp.RazorpayError, rzp.RazorpayNotConfigured, ValueError)
 
 
 def ts_to_dt(value) -> datetime | None:
@@ -61,7 +65,13 @@ def collection_out(c: QRCollection) -> dict:
         "created_by": {"id": c.created_by.id, "name": c.created_by.name},
         "created_at": c.created_at,
         "last_synced_at": c.last_synced_at,
+        "public_token": c.public_token,
+        "payment_page_url": payment_page_url(c),
     }
+
+
+def payment_page_url(c: QRCollection) -> str:
+    return f"{config.public_base_url()}/pay/{c.public_token}"
 
 
 def _apply_qr_entity(col: QRCollection, qr: dict) -> None:
@@ -136,6 +146,38 @@ def sync_collection(db: Session, collection_id: int) -> QRCollection:
     _recompute(db, col)
     col.last_synced_at = utcnow()
     col.last_sync_error = None
+    db.commit()
+    return col
+
+
+def refresh_if_stale(db: Session, col: QRCollection) -> tuple[QRCollection, str | None]:
+    """Re-check a pending collection with Razorpay, at most once per SYNC_THROTTLE_SECONDS.
+
+    Returns the (possibly updated) collection and an error message if the check failed. A failed check
+    changes nothing except recording the error, so the stored status stays whatever Razorpay last confirmed.
+    """
+    stale = col.last_synced_at is None or (utcnow() - col.last_synced_at).total_seconds() > SYNC_THROTTLE_SECONDS
+    if col.payment_status != "pending" or not stale:
+        return col, None
+    cid = col.id
+    try:
+        return sync_collection(db, cid), None
+    except SYNC_ERRORS as exc:
+        db.rollback()
+        message = getattr(exc, "message", None) or str(exc)
+        col = db.get(QRCollection, cid)
+        col.last_sync_error = message[:1000]
+        col.last_synced_at = utcnow()
+        db.commit()
+        return col, message
+
+
+def apply_closed_qr(db: Session, collection_id: int, qr: dict) -> QRCollection:
+    """Record a QR entity Razorpay returned from a close call, when a full re-sync is not possible.
+    Payments already recorded still win: a paid collection never becomes cancelled."""
+    col = db.scalar(select(QRCollection).where(QRCollection.id == collection_id).with_for_update())
+    _apply_qr_entity(col, qr)
+    _recompute(db, col)
     db.commit()
     return col
 

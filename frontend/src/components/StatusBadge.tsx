@@ -20,6 +20,7 @@ const MAP: Record<string, { tone: keyof typeof TONES; label: string }> = {
   failed: { tone: "red", label: "Failed" },
   rejected: { tone: "red", label: "Rejected" },
   closed: { tone: "slate", label: "Closed" },
+  cancelled: { tone: "slate", label: "Cancelled" },
   processed: { tone: "green", label: "Processed" },
   ignored: { tone: "slate", label: "Ignored" },
   unmatched: { tone: "red", label: "Unmatched" },

@@ -67,7 +67,9 @@ Back up the database (`pg_dump -Fc`) before applying migrations in production. D
 If `RUN_MIGRATIONS_ON_STARTUP=true` locally, a running `uvicorn --reload` applies new migration files to your local database as soon as they appear.
 
 ## Razorpay webhook
-In Razorpay Dashboard → Settings → Webhooks add `https://<your-domain>/api/webhooks/razorpay` with your `RAZORPAY_WEBHOOK_SECRET`, events `qr_code.credited`, `qr_code.closed`, `payment.captured`. The admin "Razorpay Setup" page shows the exact URL and recent webhook events with errors.
+In Razorpay Dashboard → Settings → Webhooks add `https://<your-domain>/api/webhooks/razorpay`. You choose the webhook secret yourself (e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"`); enter it in Razorpay and set the same value as `RAZORPAY_WEBHOOK_SECRET`. Use separate secrets for test and live. Subscribe to `qr_code.credited`, `qr_code.closed`, `payment.captured`. The admin "Razorpay Setup" page shows the exact URL and recent webhook events with errors.
+
+**Local testing:** Razorpay cannot reach `localhost`. Expose the backend port with a tunnel (e.g. `cloudflared tunnel --url http://localhost:8000`) and register `https://<tunnel-host>/api/webhooks/razorpay` as a Test Mode webhook.
 
 Processing:
 1. HMAC-SHA256 of the **raw body** is verified against `X-Razorpay-Signature` (constant-time compare). Invalid signatures get 400 and are logged.
@@ -83,6 +85,15 @@ If saving a newly created QR fails, the app immediately closes that QR at Razorp
 The frontend also polls `GET /api/collections/{id}/status?refresh=true`, which reconciles with Razorpay (throttled) if a webhook is late or missing.
 
 **Test Mode:** Razorpay test-mode QR codes are not meant for real UPI scanning. Simulate payments from the Razorpay test dashboard.
+
+## Customer payment page
+Each collection has an unguessable `public_token`. Staff copy or open the link (`/pay/<token>`) from the collection screen and send it to the customer. No login is needed.
+
+- `GET /api/public/pay/{token}` is the only public API. It returns customer name, amount (paise), status (`pending` / `paid` / `expired` / `cancelled`), the Razorpay QR image URL (only while payable), expiry, payment time and Razorpay payment reference. It never returns internal ids, staff, contact details, credentials or webhook data. Unknown or malformed tokens get 404. Responses are `no-store` / `noindex`; limited to 90 requests per minute per IP (per worker; add nginx `limit_req` in production).
+- The page polls every 3–5 s and stops once the status is final, or 10 minutes after expiry. Each poll may re-check Razorpay, at most once per 8 s per collection. "Paid" only ever comes from Razorpay's own records (captured, exact amount, INR).
+
+## Cancelling a QR
+`POST /api/collections/{id}/cancel` (owner or admin). The app re-checks Razorpay, closes the QR at Razorpay, then reads the result back. A payment captured at any point before the close wins: the collection becomes paid and the call returns 409. If Razorpay cannot close the QR, nothing changes locally and the call returns 424, because the QR may still be payable. Cancelling twice is harmless.
 
 ## Health checks
 - `GET /api/health/live`: process is up (no database access).

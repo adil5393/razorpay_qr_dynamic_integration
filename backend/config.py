@@ -147,5 +147,11 @@ def _migrate_default() -> str:
     return "false" if is_production() else "true"
 
 
+def public_base_url() -> str:
+    """Base URL of the web app (first FRONTEND_URL entry), used to build public payment links."""
+    origins = _split(_env("FRONTEND_URL"))
+    return origins[0].rstrip("/") if origins else ""
+
+
 def run_migrations_on_startup() -> bool:
     return _env("RUN_MIGRATIONS_ON_STARTUP", _migrate_default()).lower() == "true"

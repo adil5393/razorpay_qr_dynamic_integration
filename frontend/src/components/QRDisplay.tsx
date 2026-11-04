@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CheckCircle2, Copy, Download, Loader2, ShieldCheck, Timer } from "lucide-react";
+import { CheckCircle2, Copy, Download, ExternalLink, Link2, Loader2, ShieldCheck, Timer } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -32,6 +32,11 @@ export function QRDisplay({ collection, live }: { collection: Collection; live?:
   const onCopy = async () => {
     const ok = await copyText(collection.image_url);
     if (ok) toast.success("QR link copied"); else toast.error("Could not copy link");
+  };
+
+  const onCopyPageLink = async () => {
+    const ok = await copyText(collection.payment_page_url);
+    if (ok) toast.success("Customer payment page link copied"); else toast.error("Could not copy link");
   };
 
   const onDownload = async () => {
@@ -101,6 +106,19 @@ export function QRDisplay({ collection, live }: { collection: Collection; live?:
           {downloading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Download className="h-5 w-5" />} Download
         </Button>
       </div>
+
+      {paymentStatus === "pending" && collection.payment_page_url && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Button variant="secondary" className="h-12 gap-2" onClick={onCopyPageLink} data-testid="copy-payment-page-link-button">
+            <Link2 className="h-5 w-5" /> Copy customer link
+          </Button>
+          <Button asChild variant="secondary" className="h-12 gap-2" data-testid="open-payment-page-button">
+            <a href={collection.payment_page_url} target="_blank" rel="noopener noreferrer">
+              <ExternalLink className="h-5 w-5" /> Open customer page
+            </a>
+          </Button>
+        </div>
+      )}
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-border bg-muted/40 p-4 text-sm">
         <dt className="text-muted-foreground">Collection ID</dt><dd data-testid="qr-display-code" className="font-num text-right">{collection.code}</dd>
