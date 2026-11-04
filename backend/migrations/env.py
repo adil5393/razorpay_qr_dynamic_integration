@@ -4,7 +4,7 @@ from pathlib import Path
 
 from alembic import context
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, pool
+from sqlalchemy import create_engine, pool, text
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
@@ -22,12 +22,26 @@ def run_migrations_offline():
         context.run_migrations()
 
 
+# Arbitrary constant; all app processes use it so only one runs migrations at a time.
+MIGRATION_LOCK_KEY = 74_210_391
+
+
 def run_migrations_online():
     engine = create_engine(os.environ["DATABASE_URL"], poolclass=pool.NullPool)
     with engine.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
-        with context.begin_transaction():
-            context.run_migrations()
+        locked = connection.dialect.name == "postgresql"
+        if locked:
+            # Blocks until any other process has finished migrating, then re-checks the version.
+            connection.execute(text("SELECT pg_advisory_lock(:k)"), {"k": MIGRATION_LOCK_KEY})
+            connection.commit()
+        try:
+            context.configure(connection=connection, target_metadata=target_metadata)
+            with context.begin_transaction():
+                context.run_migrations()
+        finally:
+            if locked:
+                connection.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": MIGRATION_LOCK_KEY})
+                connection.commit()
 
 
 if context.is_offline_mode():

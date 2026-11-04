@@ -5,10 +5,16 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env")
 
+import config  # noqa: E402
+
+config.validate()  # fail fast with a readable list of problems
+
+import ipaddress  # noqa: E402
 import logging  # noqa: E402
 import os  # noqa: E402
 import secrets  # noqa: E402
 import subprocess  # noqa: E402
+import time  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
 from datetime import timedelta  # noqa: E402
 from typing import Optional  # noqa: E402
@@ -16,7 +22,7 @@ from typing import Optional  # noqa: E402
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response  # noqa: E402
 from fastapi.concurrency import run_in_threadpool  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
-from sqlalchemy import func, or_, select  # noqa: E402
+from sqlalchemy import func, or_, select, text  # noqa: E402
 from sqlalchemy.orm import Session, joinedload  # noqa: E402
 from starlette.middleware.cors import CORSMiddleware  # noqa: E402
 
@@ -26,29 +32,38 @@ from auth import (  # noqa: E402
     set_auth_cookies, user_from_token, verify_password,
 )
 from bootstrap_admin import ensure_admin  # noqa: E402
-from db import SessionLocal, get_db  # noqa: E402
+from db import SessionLocal, engine, get_db  # noqa: E402
+from logging_setup import configure_logging, new_request_id, request_id_var  # noqa: E402
 from models import LoginAttempt, Payment, QRCollection, User, WebhookEvent, utcnow  # noqa: E402
 from schemas import (  # noqa: E402
     ChangePassword, CollectionCreate, LoginIn, PasswordReset, UserCreate, UserOut, UserStatusUpdate,
 )
 from services import collection_out, payment_out, process_webhook, sync_collection, ts_to_dt  # noqa: E402
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+configure_logging()
 logger = logging.getLogger("uqc")
+access_logger = logging.getLogger("uqc.access")
 
 MAX_FAILED_LOGINS = 5
 LOCKOUT_MINUTES = 15
 SYNC_THROTTLE_SECONDS = 8
 UPSTREAM_ERROR = 424  # not 502: the preview proxy replaces 502 bodies with its own page
+MAX_WEBHOOK_BYTES = 256 * 1024  # Razorpay events are a few KB
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if os.environ.get("LOCAL_POSTGRES_BOOTSTRAP") == "true":
         subprocess.run(["bash", str(ROOT.parent / "scripts" / "start_postgres.sh")], check=False, timeout=300)
-    from migrate import run_migrations
+    from migrate import ensure_database_at_head, run_migrations
 
-    await run_in_threadpool(run_migrations)
+    if config.run_migrations_on_startup():
+        logger.info("RUN_MIGRATIONS_ON_STARTUP=true: applying migrations (development convenience)")
+        await run_in_threadpool(run_migrations)
+    else:
+        # Migrations are a deployment step; refuse to serve on an out-of-date schema.
+        await run_in_threadpool(ensure_database_at_head)
+    logger.info("Starting (APP_ENV=%s, Razorpay mode=%s)", config.app_env(), rzp.mode() or "not configured")
     with SessionLocal() as db:
         logger.info("Admin bootstrap: %s", ensure_admin(db))
     yield
@@ -72,11 +87,48 @@ async def origin_guard(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    # Registered last, so it runs first: every log line, including the origin guard's, gets the ID.
+    rid = new_request_id(request.headers.get("x-request-id"))
+    token = request_id_var.set(rid)
+    start = time.perf_counter()
+    status = 500
+    try:
+        try:
+            response = await call_next(request)
+        except Exception:
+            logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+            response = JSONResponse({"detail": "Internal server error", "request_id": rid}, status_code=500)
+        status = response.status_code
+        response.headers["X-Request-ID"] = rid
+        return response
+    finally:
+        level = logging.DEBUG if request.url.path == "/api/health" else logging.INFO
+        access_logger.log(level, "%s %s %s", request.method, request.url.path, status, extra={
+            "method": request.method, "path": request.url.path, "status": status,
+            "duration_ms": round((time.perf_counter() - start) * 1000, 1), "client_ip": client_ip(request),
+        })
+        request_id_var.reset(token)
+
+
 def client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """The real client IP. X-Forwarded-For is only believed when the direct peer is a proxy listed
+    in TRUSTED_PROXIES; then the right-most address that is not a trusted proxy is the client.
+    Anyone can send a fake X-Forwarded-For, so trusting it blindly would let attackers dodge the
+    login lockout by inventing a new IP for every attempt."""
+    peer = request.client.host if request.client else None
+    if not config.is_trusted_proxy(peer):
+        return peer or "unknown"
+    hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+    for hop in reversed(hops):
+        try:
+            ipaddress.ip_address(hop)
+        except ValueError:
+            break  # malformed entry: stop and fall back to the peer
+        if not config.is_trusted_proxy(hop):
+            return hop
+    return peer or "unknown"
 
 
 # ---------- Auth ----------
@@ -281,9 +333,19 @@ def create_collection(data: CollectionCreate, user: User = Depends(get_current_u
         close_by=ts_to_dt(qr.get("close_by")) or ts_to_dt(close_by),
         payment_status="pending", created_by_id=user.id, created_at=utcnow(),
     )
-    db.add(col)
-    db.commit()
-    db.refresh(col)
+    try:
+        db.add(col)
+        db.commit()
+        db.refresh(col)
+    except Exception:
+        db.rollback()
+        logger.exception("Saving new QR %s failed; closing it at Razorpay so it cannot be paid", qr["id"])
+        try:
+            rzp.close_qr(qr["id"])
+        except Exception:
+            logger.exception("Could not close orphan Razorpay QR %s; close it from the Razorpay dashboard", qr["id"])
+        raise HTTPException(status_code=500, detail="The QR could not be saved and has been cancelled. Please try again.")
+    logger.info("Created collection %s (Razorpay QR %s, %s paise) by user %s", code, qr["id"], amount_paise, user.id)
     return collection_out(col)
 
 
@@ -404,16 +466,38 @@ def _handle_webhook(body: bytes, signature: str, event_id: Optional[str]):
 
 @api.post("/webhooks/razorpay")
 async def razorpay_webhook(request: Request):
-    body = await request.body()
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > MAX_WEBHOOK_BYTES:
+        return JSONResponse({"detail": "Payload too large"}, status_code=413)
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_WEBHOOK_BYTES:
+            return JSONResponse({"detail": "Payload too large"}, status_code=413)
+        chunks.append(chunk)
+    body = b"".join(chunks)
     status_code, content = await run_in_threadpool(
         _handle_webhook, body, request.headers.get("x-razorpay-signature", ""), request.headers.get("x-razorpay-event-id"),
     )
     return JSONResponse(content, status_code=status_code)
 
 
+@api.get("/health/live")
+def health_live():
+    """Liveness: the process is up. Does not touch the database."""
+    return {"ok": True}
+
+
 @api.get("/health")
 def health():
-    return {"ok": True}
+    """Readiness: the app can reach PostgreSQL."""
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception:
+        logger.exception("Health check: database unavailable")
+        return JSONResponse({"ok": False, "database": "unavailable"}, status_code=503)
+    return {"ok": True, "database": "ok"}
 
 
 app.include_router(api)

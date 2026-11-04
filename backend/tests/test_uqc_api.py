@@ -5,9 +5,14 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
-ADMIN = {"email": "adil.shahid93@gmail.com", "password": "kRMJR_Bbf6M44isj"}
-SECRET_FRAGMENTS = ["kRMJR_Bbf6M44isj"]
+# Runs against a live server. Credentials come from the environment only; never hardcode them.
+#   UQC_TEST_BASE_URL (or REACT_APP_BACKEND_URL), UQC_TEST_ADMIN_EMAIL, UQC_TEST_ADMIN_PASSWORD
+BASE_URL = (os.environ.get("UQC_TEST_BASE_URL") or os.environ.get("REACT_APP_BACKEND_URL") or "").rstrip("/")
+ADMIN = {"email": os.environ.get("UQC_TEST_ADMIN_EMAIL", ""), "password": os.environ.get("UQC_TEST_ADMIN_PASSWORD", "")}
+
+if not BASE_URL or not ADMIN["email"] or not ADMIN["password"]:
+    pytest.skip("Live API tests need UQC_TEST_BASE_URL, UQC_TEST_ADMIN_EMAIL and UQC_TEST_ADMIN_PASSWORD",
+                allow_module_level=True)
 
 
 def _login(email, password):

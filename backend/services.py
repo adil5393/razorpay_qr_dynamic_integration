@@ -1,8 +1,8 @@
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -10,6 +10,11 @@ import razorpay_api as rzp
 from models import Payment, QRCollection, WebhookEvent, utcnow
 
 logger = logging.getLogger("uqc.services")
+
+# Bad-signature requests are unauthenticated, so cap how many we store per minute.
+REJECTED_EVENTS_LOGGED_PER_MINUTE = 20
+# Final statuses: a redelivery of the same event id is acknowledged without reprocessing.
+FINAL_EVENT_STATUSES = ("processed", "ignored", "unmatched")
 
 
 def ts_to_dt(value) -> datetime | None:
@@ -139,15 +144,25 @@ def _entity_id(payload: dict, key: str) -> str | None:
     return (((payload.get("payload") or {}).get(key) or {}).get("entity") or {}).get("id")
 
 
+def _record_rejected(db: Session, event_id: str | None) -> None:
+    since = utcnow() - timedelta(minutes=1)
+    recent = db.scalar(select(func.count()).select_from(WebhookEvent).where(
+        WebhookEvent.status == "rejected", WebhookEvent.received_at >= since))
+    logger.warning("Webhook rejected: invalid signature (event id: %s)", (event_id or "n/a")[:64])
+    if recent >= REJECTED_EVENTS_LOGGED_PER_MINUTE:
+        return
+    db.add(WebhookEvent(
+        event_id=None, signature_valid=False, status="rejected", attempts=1,
+        error=f"Invalid signature (event id: {(event_id or 'n/a')[:64]})", received_at=utcnow(),
+    ))
+    db.commit()
+
+
 def process_webhook(db: Session, body: bytes, signature: str, event_id: str | None) -> tuple[int, dict]:
     if not rzp.webhook_secret_configured():
         return 503, {"detail": "Webhook secret not configured"}
     if not rzp.verify_webhook_signature(body, signature):
-        db.add(WebhookEvent(
-            event_id=None, signature_valid=False, status="rejected", attempts=1,
-            error=f"Invalid signature (event id: {(event_id or 'n/a')[:64]})", received_at=utcnow(),
-        ))
-        db.commit()
+        _record_rejected(db, event_id)
         return 400, {"detail": "Invalid signature"}
     try:
         payload = json.loads(body)
@@ -161,7 +176,7 @@ def process_webhook(db: Session, body: bytes, signature: str, event_id: str | No
     ev = None
     if event_id:
         ev = db.scalar(select(WebhookEvent).where(WebhookEvent.event_id == event_id).with_for_update())
-        if ev and ev.status in ("processed", "ignored"):
+        if ev and ev.status in FINAL_EVENT_STATUSES:
             ev.attempts += 1
             db.commit()
             return 200, {"status": "duplicate"}
@@ -189,11 +204,18 @@ def process_webhook(db: Session, body: bytes, signature: str, event_id: str | No
         known = db.scalar(select(Payment).where(Payment.razorpay_payment_id == pay_id))
         col = known.collection if known else None
     if col is None:
-        ev.status = "ignored"
-        ev.error = "No matching QR collection for this event"
+        if qr_id:
+            # A QR event we have no record of: possibly a QR created at Razorpay whose save failed.
+            # Flag it for an administrator instead of silently ignoring it.
+            ev.status = "unmatched"
+            ev.error = f"No collection in this app for Razorpay QR {qr_id}; check the Razorpay dashboard"
+            logger.error("Webhook %s (%s) refers to unknown QR %s", event_id, event_type, qr_id)
+        else:
+            ev.status = "ignored"
+            ev.error = "Event is not about a QR collection created by this app"
         ev.processed_at = utcnow()
         db.commit()
-        return 200, {"status": "ignored"}
+        return 200, {"status": ev.status}
 
     ev.collection_id = col.id
     db.commit()

@@ -22,6 +22,7 @@ const MAP: Record<string, { tone: keyof typeof TONES; label: string }> = {
   closed: { tone: "slate", label: "Closed" },
   processed: { tone: "green", label: "Processed" },
   ignored: { tone: "slate", label: "Ignored" },
+  unmatched: { tone: "red", label: "Unmatched" },
   received: { tone: "amber", label: "Received" },
   inactive: { tone: "slate", label: "Inactive" },
 };

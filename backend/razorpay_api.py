@@ -90,6 +90,10 @@ def fetch_qr(qr_id: str) -> dict:
     return _request("GET", f"/payments/qr_codes/{qr_id}")
 
 
+def close_qr(qr_id: str) -> dict:
+    return _request("POST", f"/payments/qr_codes/{qr_id}/close")
+
+
 def fetch_qr_payments(qr_id: str) -> list[dict]:
     return _request("GET", f"/payments/qr_codes/{qr_id}/payments").get("items", [])
 

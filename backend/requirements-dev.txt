@@ -1,0 +1,5 @@
+# Development and test dependencies
+-r requirements.txt
+pytest==9.2.0
+pytest-xdist==3.8.0
+requests==2.34.2

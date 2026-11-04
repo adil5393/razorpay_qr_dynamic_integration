@@ -89,3 +89,18 @@ android-sdk/
 credentials.json
 *.key
 .credentials
+!.env.example
+!**/.env.example
+
+# Local database files (never commit)
+pgdata/
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql.gz
+
+# Python virtualenvs and caches
+venv/
+.venv/
+.pytest_cache/

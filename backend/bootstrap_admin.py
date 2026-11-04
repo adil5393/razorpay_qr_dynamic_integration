@@ -5,6 +5,7 @@ Usage: python bootstrap_admin.py   (idempotent; never changes an existing accoun
 import os
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auth import hash_password
@@ -27,7 +28,12 @@ def ensure_admin(db: Session) -> str:
         role="admin",
         is_active=True,
     ))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Another worker created it at the same moment.
+        db.rollback()
+        return f"exists: {email}"
     return f"created: {email}"
 
 
