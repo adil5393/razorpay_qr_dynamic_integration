@@ -75,8 +75,9 @@ export function QRDisplay({ collection, live }: { collection: Collection; live?:
 
       <div className="relative mx-auto w-full max-w-sm">
         <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
-          <img data-testid="qr-image" src={collection.image_url} alt={`Razorpay QR for ${formatINR(collection.amount_paise)}`}
-            className={paid ? "w-full opacity-20" : "w-full"} />
+          {paymentStatus === "pending" && qrStatus === "active" ?
+            <img data-testid="qr-image" src={collection.image_url} alt={`Razorpay QR for ${formatINR(collection.amount_paise)}`} className="w-full" /> :
+            <p className="p-12 text-center text-slate-700">{paid ? "Payment confirmed" : "QR is no longer available"}</p>}
         </div>
         {paid && (
           <div data-testid="payment-confirmed-overlay" className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-2xl bg-emerald-600/95 p-6 text-center text-white">
@@ -98,16 +99,16 @@ export function QRDisplay({ collection, live }: { collection: Collection; live?:
       )}
       {live?.sync_error && <p data-testid="qr-sync-error" className="text-center text-xs text-rose-500">Status check issue: {live.sync_error}</p>}
 
-      <div className="grid grid-cols-2 gap-3">
+      {paymentStatus === "pending" && qrStatus === "active" && <div className="grid grid-cols-2 gap-3">
         <Button variant="outline" className="h-14 gap-2 text-base" onClick={onCopy} data-testid="copy-qr-url-button">
           <Copy className="h-5 w-5" /> Copy QR link
         </Button>
         <Button variant="outline" className="h-14 gap-2 text-base" onClick={onDownload} disabled={downloading} data-testid="download-qr-image-button">
           {downloading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Download className="h-5 w-5" />} Download
         </Button>
-      </div>
+      </div>}
 
-      {paymentStatus === "pending" && collection.payment_page_url && (
+      {paymentStatus === "pending" && qrStatus === "active" && collection.payment_page_url && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Button variant="secondary" className="h-12 gap-2" onClick={onCopyPageLink} data-testid="copy-payment-page-link-button">
             <Link2 className="h-5 w-5" /> Copy customer link

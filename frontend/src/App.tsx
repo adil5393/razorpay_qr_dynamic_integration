@@ -13,6 +13,27 @@ import NewCollection from "@/pages/NewCollection";
 import PublicPay from "@/pages/PublicPay";
 import Settings from "@/pages/Settings";
 import Users from "@/pages/Users";
+import Terminal from "@/pages/Terminal";
+import Deliveries from "@/pages/Deliveries";
+import { useAuth } from "@/context/AuthContext";
+import { useAppConfig } from "@/hooks/queries";
+import { LoadingState } from "@/components/States";
+
+function Home() {
+  const { user } = useAuth();
+  const config = useAppConfig();
+  if (config.isLoading) return <LoadingState />;
+  if (config.error) return <p>Unable to load configuration.</p>;
+  return user && user.role === "cashier" && config.data?.odoo_terminal_cutover ? <Terminal /> : <Dashboard />;
+}
+
+function CollectRoute() {
+  const { user } = useAuth();
+  const config = useAppConfig();
+  if (config.isLoading) return <LoadingState />;
+  if (config.error || (user && user.role !== "admin" && config.data?.odoo_terminal_cutover)) return <Navigate to="/" replace />;
+  return <NewCollection />;
+}
 
 function ThemedToaster() {
   const { theme } = useTheme();
@@ -27,13 +48,15 @@ function StaffApp() {
         <Route path="/login" element={<Login />} />
         <Route element={<ProtectedRoute />}>
           <Route element={<AppLayout />}>
-            <Route index element={<Dashboard />} />
-            <Route path="collect" element={<NewCollection />} />
+            <Route index element={<Home />} />
+            <Route path="collect" element={<CollectRoute />} />
             <Route path="history" element={<History />} />
+            <Route path="terminal" element={<Terminal />} />
             <Route path="collections/:id" element={<CollectionDetail />} />
             <Route element={<ProtectedRoute adminOnly />}>
               <Route path="users" element={<Users />} />
               <Route path="settings" element={<Settings />} />
+              <Route path="odoo-deliveries" element={<Deliveries />} />
             </Route>
           </Route>
         </Route>

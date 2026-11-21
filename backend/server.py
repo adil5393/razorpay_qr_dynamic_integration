@@ -16,6 +16,7 @@ import re  # noqa: E402
 import secrets  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
+import threading  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
 from datetime import timedelta  # noqa: E402
 from typing import Optional  # noqa: E402
@@ -82,7 +83,18 @@ async def lifespan(app: FastAPI):
     logger.info("Starting (APP_ENV=%s, Razorpay mode=%s)", config.app_env(), rzp.mode() or "not configured")
     with SessionLocal() as db:
         logger.info("Admin bootstrap: %s", ensure_admin(db))
-    yield
+    stop = threading.Event()
+    callback_thread = None
+    if os.environ.get("ODOO_CALLBACK_WORKER_ENABLED", "false").lower() == "true":
+        from odoo_terminal import worker
+        callback_thread = threading.Thread(target=worker, args=(stop,), daemon=True)
+        callback_thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        if callback_thread:
+            callback_thread.join(timeout=20)
 
 
 app = FastAPI(title="Universal QR Collections", lifespan=lifespan)
@@ -271,6 +283,7 @@ def app_config(_: User = Depends(get_current_user)):
         "razorpay_configured": rzp.is_configured(),
         "razorpay_mode": rzp.mode(),
         "qr_expiry_minutes": int(os.environ["QR_EXPIRY_MINUTES"]),
+        "odoo_terminal_cutover": os.environ.get("ODOO_TERMINAL_CUTOVER", "false").lower() == "true",
     }
 
 
@@ -301,18 +314,26 @@ def webhook_events(_: User = Depends(require_admin), db: Session = Depends(get_d
 # ---------- Collections ----------
 
 def _scope(user: User) -> list:
-    return [] if user.role == "admin" else [QRCollection.created_by_id == user.id]
+    if user.role == "admin":
+        return []
+    from odoo_terminal import cutover_enabled
+    return [QRCollection.source == "api"] if cutover_enabled() else [QRCollection.created_by_id == user.id]
 
 
 def _get_collection(db: Session, cid: int, user: User) -> QRCollection:
     col = db.get(QRCollection, cid)
-    if not col or (user.role != "admin" and col.created_by_id != user.id):
+    from odoo_terminal import cutover_enabled
+    permitted = col and (user.role == "admin" or (col.source == "api" if cutover_enabled() else col.created_by_id == user.id))
+    if not permitted:
         raise HTTPException(status_code=404, detail="Collection not found")
     return col
 
 
 @api.post("/collections", status_code=201)
 def create_collection(data: CollectionCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from odoo_terminal import cutover_enabled
+    if user.role != "admin" and cutover_enabled():
+        raise HTTPException(status_code=403, detail="Manual QR creation is restricted to administrators")
     amount_paise = int((data.amount * 100).to_integral_value())
     if amount_paise < 100:
         raise HTTPException(status_code=422, detail="Minimum amount is ₹1.00")
@@ -453,6 +474,9 @@ def cancel_collection(cid: int, user: User = Depends(get_current_user), db: Sess
     confirms the QR is closed, and a payment captured at any point (even milliseconds before the close)
     always wins, because every decision is made from a fresh read of Razorpay's QR and payment records.
     """
+    from odoo_terminal import cutover_enabled
+    if user.role != "admin" and cutover_enabled():
+        raise HTTPException(status_code=403, detail="Administrator access required")
     col = _get_collection(db, cid, user)
     if col.payment_status == "closed":
         return collection_out(col)  # already cancelled: idempotent
@@ -628,6 +652,8 @@ def health():
 
 
 app.include_router(api)
+from odoo_terminal import router as odoo_router  # noqa: E402
+app.include_router(odoo_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),

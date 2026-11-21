@@ -147,6 +147,7 @@ class ApiClient(Base):
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
+    odoo_instance: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     key_prefix: Mapped[str] = mapped_column(String(24), unique=True, nullable=False)
     key_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     environment: Mapped[str] = mapped_column(String(10), nullable=False)
@@ -238,3 +239,28 @@ class AuditLog(Base):
     ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
     request_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+
+class OdooPaymentRequest(Base):
+    __tablename__ = "odoo_payment_requests"
+    __table_args__ = (
+        UniqueConstraint("instance", "request_reference", name="uq_odoo_request_identity"),
+        CheckConstraint("state IN ('creating', 'ready', 'ambiguous')", name="ck_odoo_request_state"),
+        CheckConstraint("amount_paise >= 100", name="ck_odoo_request_amount"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    api_client_id: Mapped[int] = mapped_column(ForeignKey("api_clients.id"), nullable=False)
+    instance: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_reference: Mapped[str] = mapped_column(String(128), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    invoice_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    invoice_number: Mapped[str] = mapped_column(String(120), nullable=False)
+    customer_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    customer_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    amount_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="creating")
+    collection_id: Mapped[Optional[int]] = mapped_column(ForeignKey("qr_collections.id"), unique=True)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, default=utcnow, server_default=text("now()"))
+    collection: Mapped[Optional[QRCollection]] = relationship()

@@ -12,12 +12,16 @@ import { QRDisplay } from "@/components/QRDisplay";
 import { StatusBadge } from "@/components/StatusBadge";
 import { TestModeBanner } from "@/components/TestModeBanner";
 import { EmptyState, ErrorState, LoadingState } from "@/components/States";
-import { useCollectionStatus } from "@/hooks/queries";
+import { useCollectionStatus, useAppConfig } from "@/hooks/queries";
+import { useAuth } from "@/context/AuthContext";
 import { api, formatApiError } from "@/lib/api";
 import { formatDateTime, formatINR } from "@/lib/format";
 import type { Collection } from "@/types";
 
 export default function CollectionDetail() {
+  const { user } = useAuth();
+  const config = useAppConfig();
+  const canManage = user && (user.role === "admin" || !config.data?.odoo_terminal_cutover);
   const { id } = useParams();
   const cid = Number(id);
   const qc = useQueryClient();
@@ -72,7 +76,7 @@ export default function CollectionDetail() {
           <Link to="/history"><ArrowLeft className="h-4 w-4" /> Back to history</Link>
         </Button>
         <div className="flex flex-wrap gap-2">
-          {(live?.payment_status ?? data.payment_status) === "pending" && (live?.qr_status ?? data.qr_status) === "active" && (
+          {canManage && (live?.payment_status ?? data.payment_status) === "pending" && (live?.qr_status ?? data.qr_status) === "active" && (
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="outline" className="h-11 gap-2 text-rose-600 hover:text-rose-700" disabled={cancelling} data-testid="detail-cancel-qr-button">
@@ -96,9 +100,9 @@ export default function CollectionDetail() {
               </AlertDialogContent>
             </AlertDialog>
           )}
-          <Button variant="outline" className="h-11 gap-2" onClick={() => refetchStatus()} disabled={isFetching} data-testid="detail-refresh-status-button">
+          {canManage && <Button variant="outline" className="h-11 gap-2" onClick={() => refetchStatus()} disabled={isFetching} data-testid="detail-refresh-status-button">
             <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} /> Check status
-          </Button>
+          </Button>}
         </div>
       </div>
       <TestModeBanner />

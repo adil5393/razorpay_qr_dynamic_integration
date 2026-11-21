@@ -4,6 +4,7 @@ import { History, LayoutDashboard, LogOut, Menu, Moon, QrCode, Settings2, Sun, U
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useAuth } from "@/context/AuthContext";
+import { useAppConfig } from "@/hooks/queries";
 import { useTheme } from "@/context/ThemeContext";
 import { cn } from "@/lib/utils";
 
@@ -12,6 +13,8 @@ const NAV = [
   { to: "/collect", label: "New QR Collection", icon: QrCode, testId: "nav-new-qr-link", admin: false },
   { to: "/history", label: "QR History", icon: History, testId: "nav-qr-history-link", admin: false },
   { to: "/users", label: "Users", icon: Users, testId: "nav-user-mgmt-link", admin: true },
+  { to: "/terminal", label: "Odoo requests", icon: QrCode, testId: "nav-odoo-requests", admin: true },
+  { to: "/odoo-deliveries", label: "Odoo sync", icon: History, testId: "nav-odoo-sync", admin: true },
   { to: "/settings", label: "Razorpay Setup", icon: Settings2, testId: "nav-settings-link", admin: true },
 ];
 
@@ -30,9 +33,11 @@ function Brand() {
 function NavItems({ onNavigate, prefix }: { onNavigate?: () => void; prefix: string }) {
   const { user } = useAuth();
   const isAdmin = user && user.role === "admin";
+  const config = useAppConfig();
+  const terminal = !isAdmin && config.data?.odoo_terminal_cutover;
   return (
     <nav className="flex flex-col gap-1 px-3">
-      {NAV.filter((n) => !n.admin || isAdmin).map((n) => (
+      {NAV.filter((n) => (!n.admin || isAdmin) && !(terminal && n.to === "/collect")).map((n) => (
         <NavLink
           key={n.to}
           to={n.to}

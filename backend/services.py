@@ -144,6 +144,10 @@ def sync_collection(db: Session, collection_id: int) -> QRCollection:
         _upsert_payment(db, col, p)
     db.flush()
     _recompute(db, col)
+    if col.api_client_id:
+        from odoo_terminal import enqueue_payment
+        for payment in db.scalars(select(Payment).where(Payment.collection_id == col.id, Payment.is_successful.is_(True))).all():
+            enqueue_payment(db, col, payment)
     col.last_synced_at = utcnow()
     col.last_sync_error = None
     db.commit()

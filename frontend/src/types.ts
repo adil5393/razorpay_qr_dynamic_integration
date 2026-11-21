@@ -64,6 +64,7 @@ export interface CollectionStatus {
 }
 
 export interface AppConfig {
+  odoo_terminal_cutover: boolean;
   razorpay_configured: boolean;
   razorpay_mode: "test" | "live" | null;
   qr_expiry_minutes: number;

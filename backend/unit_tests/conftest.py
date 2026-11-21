@@ -9,6 +9,9 @@ assert TEST_DB and TEST_DB.rsplit("/", 1)[-1].endswith("_test"), "TEST_DATABASE_
 
 os.environ.update({
     "DATABASE_URL": TEST_DB,
+    "ODOO_TERMINAL_CUTOVER": "false",
+    "ODOO_CALLBACK_WORKER_ENABLED": "false",
+    "ODOO_CALLBACK_URLS": "",
     "JWT_SECRET": "test-secret-for-pytest-only-0123456789abcdef",
     "COOKIE_SECURE": "false",
     "FRONTEND_URL": "http://testserver",
