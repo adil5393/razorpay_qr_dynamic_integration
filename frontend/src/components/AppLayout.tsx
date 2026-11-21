@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { History, LayoutDashboard, LogOut, Menu, Moon, QrCode, Settings2, Sun, Users } from "lucide-react";
+import { History, LayoutDashboard, ListOrdered, LogOut, Menu, Moon, QrCode, Settings2, Sun, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useAuth } from "@/context/AuthContext";
@@ -49,7 +49,7 @@ function NavItems({ onNavigate, prefix }: { onNavigate?: () => void; prefix: str
             isActive ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground",
           )}
         >
-          <n.icon className="h-5 w-5" />{n.label}
+          <n.icon className="h-5 w-5" />{terminal && n.to === "/" ? "Terminal" : n.label}
         </NavLink>
       ))}
     </nav>
@@ -72,9 +72,21 @@ function UserFooter() {
 
 export default function AppLayout() {
   const [open, setOpen] = useState(false);
+  const [queueCount, setQueueCount] = useState(0);
+  useLayoutEffect(() => {
+    const onCount = (event: Event) => setQueueCount((event as CustomEvent<number>).detail);
+    window.addEventListener("uqc:queue-count", onCount);
+    return () => window.removeEventListener("uqc:queue-count", onCount);
+  }, []);
   const { user } = useAuth();
+  const config = useAppConfig();
   const { theme, toggle } = useTheme();
   const location = useLocation();
+  const cashierTerminal = !!user && user.role === "cashier" && !!config.data?.odoo_terminal_cutover;
+  const legacyCashier = !!user && user.role === "cashier" && !config.data?.odoo_terminal_cutover;
+  const terminalPath = cashierTerminal ? "/" : "/terminal";
+  const inTerminal = location.pathname === terminalPath;
+  const queueView = new URLSearchParams(location.search).get("view") === "queue";
   const current = NAV.find((n) => (n.to === "/" ? location.pathname === "/" : location.pathname.startsWith(n.to)));
 
   return (
@@ -97,7 +109,7 @@ export default function AppLayout() {
           <Button variant="ghost" size="icon" className="h-11 w-11 lg:hidden" onClick={() => setOpen(true)} data-testid="mobile-menu-button">
             <Menu className="h-5 w-5" />
           </Button>
-          <p className="font-display text-base font-semibold tracking-tight">{current?.label || "Collection details"}</p>
+          <div className="leading-tight"><p className="font-display text-base font-bold tracking-tight lg:hidden">UniversalQR</p><p className="hidden font-display text-base font-semibold tracking-tight lg:block">{current?.label || "Collection details"}</p><p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground lg:hidden">Payment terminal</p></div>
           <div className="ml-auto flex items-center gap-3">
             {user && (
               <span data-testid="user-role-badge" className={cn(
@@ -110,10 +122,20 @@ export default function AppLayout() {
             </Button>
           </div>
         </header>
-        <main className="mx-auto max-w-7xl px-4 py-8 sm:px-8 sm:py-10">
+        <main className="mx-auto max-w-7xl px-4 pb-28 pt-6 sm:px-8 sm:pt-10 lg:pb-10">
           <Outlet />
         </main>
       </div>
+      <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-3 border-t border-border bg-card/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_25px_rgba(0,0,0,0.05)] backdrop-blur lg:hidden">
+        {legacyCashier ? <>
+          <NavLink to="/" end className={({ isActive }) => cn("flex min-h-[66px] flex-col items-center justify-center gap-1 text-xs font-semibold", isActive ? "text-primary" : "text-muted-foreground")}><LayoutDashboard className="h-5 w-5" />Dashboard</NavLink>
+          <NavLink to="/collect" className={({ isActive }) => cn("flex min-h-[66px] flex-col items-center justify-center gap-1 text-xs font-semibold", isActive ? "text-primary" : "text-muted-foreground")}><QrCode className="h-5 w-5" />New QR</NavLink>
+        </> : <>
+          <NavLink to={terminalPath} end className={cn("flex min-h-[66px] flex-col items-center justify-center gap-1 text-xs font-semibold", inTerminal && !queueView ? "text-primary" : "text-muted-foreground")}><QrCode className="h-5 w-5" />Terminal</NavLink>
+          <NavLink to={terminalPath + "?view=queue"} className={cn("relative flex min-h-[66px] flex-col items-center justify-center gap-1 text-xs font-semibold", inTerminal && queueView ? "text-primary" : "text-muted-foreground")}><span className="relative"><ListOrdered className="h-5 w-5" />{queueCount > 0 && <span className="absolute -right-3 -top-2 rounded-full bg-primary px-1 text-[10px] leading-4 text-primary-foreground">{queueCount}</span>}</span>Queue</NavLink>
+        </>}
+        <NavLink to="/history" className={({ isActive }) => cn("flex min-h-[66px] flex-col items-center justify-center gap-1 text-xs font-semibold", isActive ? "text-primary" : "text-muted-foreground")}><History className="h-5 w-5" />History</NavLink>
+      </nav>
     </div>
   );
 }
