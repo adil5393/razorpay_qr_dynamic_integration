@@ -40,7 +40,11 @@ def _cookie_secure() -> bool:
 
 
 def set_auth_cookies(response: Response, user: User) -> None:
-    common = {"httponly": True, "secure": _cookie_secure(), "samesite": "lax"}
+    common = {
+        "httponly": True,
+        "secure": _cookie_secure(),
+        "samesite": os.environ.get("COOKIE_SAMESITE", "lax").lower(),
+    }
     response.set_cookie(
         "access_token", _create_token(user, "access", timedelta(minutes=ACCESS_MINUTES)),
         max_age=ACCESS_MINUTES * 60, path="/", **common,
